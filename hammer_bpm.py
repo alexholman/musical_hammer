@@ -13,7 +13,8 @@ import numpy as np
 import pygame
 from pygame.locals import *
 
-import vlc
+import subprocess
+import pipes
 # import RPi.GPIO as GPIO
 
 
@@ -39,6 +40,7 @@ def main(args):
                 if key == pygame.K_a:
                     strike_event_handler(delay_obj, song_obj)
                 elif key == pygame.K_q:
+                    song_obj = None
                     pygame.quit()
                     sys.exit()
 
@@ -85,10 +87,23 @@ class Songs(object):
             self.bpm_dict = {float(bpm): name for name, bpm in bpm_reader}
             self.bpm_array = np.array(self.bpm_dict.keys())
         self.pct_change_trigger = pct_change_trigger
-        self.player = vlc.MediaPlayer()
+        self.player = subprocess.Popen(['mpg123', '--mono', '--quiet', '--remote', '--fifo', '/tmp/fifo'],  stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.command_pipe = pipes.Template()
+
         self.now_playing = None
         self.now_playing_bpm = 0
+        self.playing = False # Flag to store the play/pause state of the player because mpg123 uses a toggle mode
 
+    #def _send_command(self, args):
+        #print(' '.join(['echo',] + args))
+        #self.command_pipe.append(' '.join(['echo',] + args), '--')
+        #fifo_handle = self.command_pipe.open('/tmp/fifo', 'w')
+        #fifo_handle.close()
+
+    def _send_command(self, args):
+        with open('/tmp/fifo', 'w') as fifo:
+            fifo.write(' '.join(args)+'\n')
+            
     def select_song(self, bpm):
         pct_change = np.abs((self.now_playing_bpm - bpm) / bpm)
         print('Now playing: {0}, BPM: {1}, % Change: {2}'.format(self.now_playing_bpm, bpm, pct_change))
@@ -102,29 +117,39 @@ class Songs(object):
         return self.now_playing
 
     def play_song(self, song_file, song_bpm):
-        if self.player.is_playing():
+        if self.playing: 
             self._fade_out()
-        self.player = vlc.MediaPlayer('file://' + os.path.join(self.music_dir, song_file))
+        self._send_command(['loadpaused', os.path.join(self.music_dir, song_file)])
+        self.playing = False
         self._fade_in()
         self.now_playing = song_file
         self.now_playing_bpm = song_bpm
 
-    
+    def _true_play(self):
+        # send <pause> toggle command only if already paused
+        if self.playing == False:
+            self._send_command(['pause'])
+            self.playing = True
+
+    def _true_pause(self):
+        # send <pause> toggle command only if not playing
+        if self.playing == True:
+            self._send_command(['pause'])
+            self.playing = False
+
     def _fade_in(self):
-        self.player.audio_set_volume(0)
-        if not self.player.is_playing():
-            self.player.play()
+        self._send_command(['volume', '0'])
+        self._true_play()
         for i in range(100):
-            self.player.audio_set_volume(i+1)
+            self._send_command(['volume', str(i+1)])
             time.sleep(1/100)
 
     def _fade_out(self):
-        if not self.player.is_playing():
-            return
         for i in range(100,0,-1):
-            self.player.audio_set_volume(i-1)
+            self._send_command(['volume', str(i-1)])
             time.sleep(1/100)
-        self.player.stop()
+        self._send_command(['stop'])
+        self.playing = False
 
 
 def parse_args():
