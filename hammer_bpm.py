@@ -14,7 +14,7 @@ import pygame
 from pygame.locals import *
 
 import subprocess
-import pipes
+# import pipes
 # import RPi.GPIO as GPIO
 
 
@@ -40,7 +40,7 @@ def main(args):
                 if key == pygame.K_a:
                     strike_event_handler(delay_obj, song_obj)
                 elif key == pygame.K_q:
-                    song_obj = None
+                    song_obj.player.terminate()
                     pygame.quit()
                     sys.exit()
 
@@ -87,8 +87,8 @@ class Songs(object):
             self.bpm_dict = {float(bpm): name for name, bpm in bpm_reader}
             self.bpm_array = np.array(self.bpm_dict.keys())
         self.pct_change_trigger = pct_change_trigger
-        self.player = subprocess.Popen(['mpg123', '--mono', '--quiet', '--remote', '--fifo', '/tmp/fifo'],  stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        self.command_pipe = pipes.Template()
+        null = open('/dev/null', 'wb')
+        self.player = subprocess.Popen(['mpg123', '--mono', '--quiet', '--remote', '--fifo', '/tmp/fifo'],  stdin=null, stdout=null, stderr=null)
 
         self.now_playing = None
         self.now_playing_bpm = 0
