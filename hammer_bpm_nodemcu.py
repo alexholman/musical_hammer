@@ -4,47 +4,45 @@ from __future__ import print_function
 from __future__ import division
 
 import sys
-import argparse
-from collections import deque
+from math import sqrt
 import time
 import os
-import csv
-import numpy as np
-import pygame
-from pygame.locals import *
+from ucollections import deque
+import debounce as db
+from machine import Pin
 
-import subprocess
-# import pipes
-# import RPi.GPIO as GPIO
+
+'''
+BPM_FILE:           TSV file with bpm values in form: filename \t bpm
+SAMPLE_SIZE:        Number of inter-strike delay values to average for BPM calculation 
+STDEV_THRESH:       Max threshold of standard dev of delay counts to trigger a bpm calculation
+PCT_CHANGE_TRIGGER: The percent change in BPM to trigger a song change
+'''
+
+BPM_FILE = 'filename'
+SAMPLE_SIZE = 4 
+STDEV_THRESH = 0.05 
+PCT_CHANGE_TRIGGER = 0.10
+SENSOR_PIN = 1
 
 
 def main(args):
 
-    delay_obj = Delays(args.stdev_thresh, args.sample_size)
-    song_obj = Songs(args.bpm_file, args.pct_change_trigger)
+    delay_obj = Delays(STDEV_THRESH, SAMPLE_SIZE)
+    song_obj = Songs(BPM_FILE, PCT_CHANGE_TRIGGER)
     
-    pygame.init()
-    BLACK = (0,0,0)
-    WIDTH = 100
-    HEIGHT = 100
-    windowSurface = pygame.display.set_mode((WIDTH, HEIGHT), 0, 32)
-    windowSurface.fill(BLACK)
+    pin_obj = Pin(SENSOR_PIN, Pin.IN)
+    led = Pin(ledpin, Pin.OUT)
+    
+    sensor_switch = DebouncedSwitch(pin_obj, strike_event_handler, (delay_obj, song_obj))
     
     while True:
-        for event in pygame.event.get():
-            if event.type == QUIT:
-                pygame.quit()
-                sys.exit()
-            if event.type == KEYDOWN:
-                key = event.key
-                if key == pygame.K_a:
-                    strike_event_handler(delay_obj, song_obj)
-                elif key == pygame.K_q:
-                    song_obj.player.terminate()
-                    pygame.quit()
-                    sys.exit()
+        pass
+                    #strike_event_handler(delay_obj, song_obj)
 
-def strike_event_handler(delay_obj, song_obj):
+
+def strike_event_handler(args):
+    delay_obj, song_obj = args
     delay_obj.add_event(time.time())
     bpm = delay_obj.calc_bpm()
     print('Detected bpm: {0}'.format(bpm))
@@ -71,7 +69,7 @@ class Delays(object):
         #print('stdev: {0}'.format(np.std(self.delays)))
 
     def calc_bpm(self):
-        if len(self.delays) == self.delays.maxlen and np.std(self.delays) < self.stdev_thresh:
+        if len(self.delays) == self.delays.maxlen and stdev(self.delays) < self.stdev_thresh:
             bps = len(self.delays) / sum(self.delays)
             self.bpm = bps * 60
             return self.bpm
@@ -81,7 +79,16 @@ class Delays(object):
 class Songs(object):
     def __init__(self, bpm_filename, pct_change_trigger):
         self.music_dir = os.path.dirname(os.path.abspath(bpm_filename))
+
         # Load BPM file
+#Data[]
+#i=0
+#with open('FileName.csv','r') as file:
+	#for line in file:
+		#line_Str=line_Str.rstrip('\n')
+		#line_Str=line_Str.rstrip('\r')
+		#Data.append(line_Str.split(','))
+        
         with open(bpm_filename, 'rb') as bpm_file:
             bpm_reader = csv.reader(bpm_file, delimiter='\t')
             self.bpm_dict = {float(bpm): name for name, bpm in bpm_reader}
@@ -152,13 +159,22 @@ class Songs(object):
         self.playing = False
 
 
-def parse_args():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('bpm_file', type=str, help='TSV file with bpm values in form: filename \t bpm')
-    parser.add_argument('--sample_size', type=int, default=4, help='Number of inter-strike delay values to average for BPM calculation')
-    parser.add_argument('--stdev_thresh', type=float, default=0.05, help='Max threshold of standard dev of delay counts to trigger a bpm calculation')
-    parser.add_argument('--pct_change_trigger', type=float, default=0.10, help='The percent change in BPM to trigger a song change')
-    return parser
+def stdev(lst, population=True):
+    """Calculates the standard deviation for a list of numbers."""
+    num_items = float(len(lst))
+    mean = sum(lst) / num_items
+    differences = [x - mean for x in lst]
+    sq_differences = [d ** 2 for d in differences]
+    ssd = sum(sq_differences)
+
+    if population is True:
+        # print('This is POPULATION standard deviation.')
+        variance = ssd / num_items
+    else:
+        # print('This is SAMPLE standard deviation.')
+        variance = ssd / (num_items - 1)
+    sd = sqrt(variance)
+    return sd
 
 if __name__ == '__main__':
     args = parse_args().parse_args()

@@ -1,3 +1,5 @@
+# taken from: https://forum.micropython.org/viewtopic.php?t=1938#p10931
+
 import micropython
 
 try:
@@ -13,6 +15,9 @@ except ImportError:
 
 class DebouncedSwitch:
     def __init__(self, sw, cb, arg=None, delay=50, tid=4):
+        # sw: Pin object that is switch input
+        # cb: callback function
+        
         self.sw = sw
         # Create references to bound methods beforehand
         # http://docs.micropython.org/en/latest/pyboard/library/micropython.html#micropython.schedule
