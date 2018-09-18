@@ -1,0 +1,20 @@
+import dfplayer as df
+df.command('0x0E',0,0)
+
+import machine
+import time
+pin = machine.Pin(2, machine.Pin.OUT)
+
+def flash(p):
+	pin.off()
+	time.sleep(1)
+	pin.on()
+	time.sleep(0.5)
+
+change_count = 0
+def callback(p):
+	print('pin change', p)
+	time.sleep(0.5)
+
+p0 = machine.Pin(5, machine.Pin.IN, machine.Pin.PULL_UP)
+p0.irq(trigger=machine.Pin.IRQ_RISING, handler=callback)
