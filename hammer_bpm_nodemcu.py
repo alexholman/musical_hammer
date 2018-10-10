@@ -1,15 +1,9 @@
-#!/usr/bin/env python
-
-from __future__ import print_function
-from __future__ import division
-
-import sys
-from math import sqrt
-import time
-import os
+from math import sqrt, fabs
+from utime import ticks_ms, ticks_diff, sleep
 from ucollections import deque
-import debounce as db
-from machine import Pin
+import debounce as db 
+from machine import Pin, UART
+import dfplayer as df
 
 
 '''
@@ -19,31 +13,31 @@ STDEV_THRESH:       Max threshold of standard dev of delay counts to trigger a b
 PCT_CHANGE_TRIGGER: The percent change in BPM to trigger a song change
 '''
 
-BPM_FILE = 'filename'
+BPM_FILE = 'bpm_list.tsv'
 SAMPLE_SIZE = 4 
 STDEV_THRESH = 0.05 
 PCT_CHANGE_TRIGGER = 0.10
-SENSOR_PIN = 1
+SENSOR_PIN = Pin(5, Pin.IN, Pin.PULL_UP)
+LED_PIN = Pin(16, Pin.OUT)
 
+DF_SERIAL_PIN = UART(1, 9600)
+DF_SERIAL_PIN.init(9600, bits=8, parity=None, stop=1)
+DF_BUSY_PIN = Pin(0, Pin.IN, Pin.PULL_UP)
 
 def main(args):
 
     delay_obj = Delays(STDEV_THRESH, SAMPLE_SIZE)
     song_obj = Songs(BPM_FILE, PCT_CHANGE_TRIGGER)
-    
-    pin_obj = Pin(SENSOR_PIN, Pin.IN)
-    led = Pin(ledpin, Pin.OUT)
-    
-    sensor_switch = DebouncedSwitch(pin_obj, strike_event_handler, (delay_obj, song_obj))
+     
+    sensor_switch = db.DebouncedSwitch(SENSOR_PIN, strike_event_handler, (delay_obj, song_obj))
     
     while True:
         pass
-                    #strike_event_handler(delay_obj, song_obj)
 
 
 def strike_event_handler(args):
     delay_obj, song_obj = args
-    delay_obj.add_event(time.time())
+    delay_obj.add_event(ticks_ms())
     bpm = delay_obj.calc_bpm()
     print('Detected bpm: {0}'.format(bpm))
     if bpm:
@@ -53,24 +47,27 @@ def strike_event_handler(args):
 class Delays(object):
     def __init__(self, stdev_thresh, sample_size):
         self.stdev_thresh = stdev_thresh
-        self.delays = deque(maxlen=sample_size)
+        self.delays = deque((), sample_size)
+        self.sample_size = sample_size
         self.last_timestamp = 0
         self.bpm = None
 
     def add_event(self, event_time):
         # debounce
-        if event_time - self.last_timestamp < 0.2:
-            return
-
-        self.delays.append(event_time - self.last_timestamp )
+        # Shouldn't need the debounce as we're using DebouncedSwitch
+        # if event_time - self.last_timestamp < 0.2:
+        #    return
+        
+        elapsed_seconds = ticks_diff(event_time, self.last_timestamp)/1000
+        self.delays.append(elapsed_seconds)
         self.last_timestamp = event_time
     
         #print('delays: {0}'.format(self.delays))
         #print('stdev: {0}'.format(np.std(self.delays)))
 
     def calc_bpm(self):
-        if len(self.delays) == self.delays.maxlen and stdev(self.delays) < self.stdev_thresh:
-            bps = len(self.delays) / sum(self.delays)
+        if len(self.delays) == self.sample_size and stdev(deque_to_list(self.delays)) < self.stdev_thresh:
+            bps = len(self.delays) / sum(deque_to_list(self.delays))
             self.bpm = bps * 60
             return self.bpm
         else:
@@ -78,86 +75,70 @@ class Delays(object):
 
 class Songs(object):
     def __init__(self, bpm_filename, pct_change_trigger):
-        self.music_dir = os.path.dirname(os.path.abspath(bpm_filename))
-
         # Load BPM file
-#Data[]
-#i=0
-#with open('FileName.csv','r') as file:
-	#for line in file:
-		#line_Str=line_Str.rstrip('\n')
-		#line_Str=line_Str.rstrip('\r')
-		#Data.append(line_Str.split(','))
+        self.bpm_dict = {}
+        self.bpm_list = []
+        with open(bpm_filename, 'r') as bpm_file:
+            for i,line in enumerate(bpm_file):
+                if i > 25:
+                    break
+                line = line.rstrip('\n')
+                line = line.rstrip('\r')
+                if not line:
+                    continue
+                print(line)
+                folder, file_name, bpm = line.split('\t')
+                folder = int(folder)
+                number = int(file_name[:3])
+                # name = file_name[:4]
+                bpm = float(bpm)
+                
+                self.bpm_dict[float(bpm)] = {'folder':folder, 'number':number} 
+                self.bpm_list.append(bpm)
+        self.bpm_list = sorted(self.bpm_list)
         
-        with open(bpm_filename, 'rb') as bpm_file:
-            bpm_reader = csv.reader(bpm_file, delimiter='\t')
-            self.bpm_dict = {float(bpm): name for name, bpm in bpm_reader}
-            self.bpm_array = np.array(self.bpm_dict.keys())
-        self.pct_change_trigger = pct_change_trigger
-        null = open('/dev/null', 'wb')
-        self.player = subprocess.Popen(['mpg123', '--mono', '--quiet', '--remote', '--fifo', '/tmp/fifo'],  stdin=null, stdout=null, stderr=null)
+        self.pct_change_trigger = PCT_CHANGE_TRIGGER
 
-        self.now_playing = None
+        self.player = df.Player(uart=DF_SERIAL_PIN, busy_pin=DF_BUSY_PIN)
         self.now_playing_bpm = 0
-        self.playing = False # Flag to store the play/pause state of the player because mpg123 uses a toggle mode
+        self.now_playing = None
 
-    #def _send_command(self, args):
-        #print(' '.join(['echo',] + args))
-        #self.command_pipe.append(' '.join(['echo',] + args), '--')
-        #fifo_handle = self.command_pipe.open('/tmp/fifo', 'w')
-        #fifo_handle.close()
-
-    def _send_command(self, args):
-        with open('/tmp/fifo', 'w') as fifo:
-            fifo.write(' '.join(args)+'\n')
-            
     def select_song(self, bpm):
-        pct_change = np.abs((self.now_playing_bpm - bpm) / bpm)
+        pct_change = fabs((self.now_playing_bpm - bpm) / bpm)
         print('Now playing: {0}, BPM: {1}, % Change: {2}'.format(self.now_playing_bpm, bpm, pct_change))
         if pct_change > self.pct_change_trigger:
-            nearest_index = (np.abs(self.bpm_array-bpm)).argmin()
-            song_file = self.bpm_dict[self.bpm_array[nearest_index]]
-            song_bpm = self.bpm_array[nearest_index]
-            if song_file != self.now_playing:
-                print('Playing song: {0} with BPM {1}'.format(song_file, song_bpm))
-                self.play_song(song_file, song_bpm)
+            
+            song_bpm = get_closest_value(self.bpm_list, bpm)
+            song_dict = self.bpm_dict[song_bpm]
+            if (song_dict['folder'],song_dict['number']) != self.now_playing:
+                print('Playing song: {0}:{1} with BPM {2}'.format(song_dict['folder'], song_dict['number'], song_bpm))
+                self.play_song(song_dict['folder'], song_dict['number'], song_bpm)
         return self.now_playing
 
-    def play_song(self, song_file, song_bpm):
-        if self.playing: 
+    def play_song(self, folder, number, bpm):
+        if self.player.playing(): 
             self._fade_out()
-        self._send_command(['loadpaused', os.path.join(self.music_dir, song_file)])
-        self.playing = False
+        else:
+            self.player.volume(0)
+        self.player.play(folder, number)
         self._fade_in()
-        self.now_playing = song_file
-        self.now_playing_bpm = song_bpm
-
-    def _true_play(self):
-        # send <pause> toggle command only if already paused
-        if self.playing == False:
-            self._send_command(['pause'])
-            self.playing = True
-
-    def _true_pause(self):
-        # send <pause> toggle command only if not playing
-        if self.playing == True:
-            self._send_command(['pause'])
-            self.playing = False
+        self.now_playing = (folder,number)
+        self.now_playing_bpm = bpm
 
     def _fade_in(self):
-        self._send_command(['volume', '0'])
-        self._true_play()
-        for i in range(100):
-            self._send_command(['volume', str(i+1)])
-            time.sleep(1/100)
+        self.player.volume(0)
+        for i in range(10):
+            self.player.volume((float(i)+1)/10)
+            sleep(1/10)
 
     def _fade_out(self):
-        for i in range(100,0,-1):
-            self._send_command(['volume', str(i-1)])
-            time.sleep(1/100)
-        self._send_command(['stop'])
-        self.playing = False
+        for i in range(10,0,-1):
+            self.player.volume((float(i)-1)/10)
+            sleep(1/10)
 
+
+#------------------------
+# Define helper functions
 
 def stdev(lst, population=True):
     """Calculates the standard deviation for a list of numbers."""
@@ -176,6 +157,51 @@ def stdev(lst, population=True):
     sd = sqrt(variance)
     return sd
 
+def get_closest_value(arr, target):
+    n = len(arr)
+    left = 0
+    right = n - 1
+    mid = 0
+
+    # edge case - last or above all
+    if target >= arr[n - 1]:
+        return arr[n - 1]
+    # edge case - first or below all
+    if target <= arr[0]:
+        return arr[0]
+    # BSearch solution: Time & Space: Log(N)
+
+    while left < right:
+        mid = (left + right) // 2  # find the mid
+        if target < arr[mid]:
+            right = mid
+        elif target > arr[mid]:
+            left = mid + 1
+        else:
+            return arr[mid]
+
+    if target < arr[mid]:
+        return find_closest(arr[mid - 1], arr[mid], target)
+    else:
+        return find_closest(arr[mid], arr[mid + 1], target)
+
+# findClosest
+# We find the closest by taking the difference
+# between the target and both values. It assumes
+# that val2 is greater than val1 and target lies
+# between these two. 
+def find_closest(val1, val2, target):
+    return val2 if target - val1 >= val2 - target else val1
+
+def deque_to_list(in_deque):
+    deque_list = []
+    for i in range(len(in_deque)):
+        deque_list.append(in_deque.popleft())
+    for item in deque_list:
+        # print('appending: {0}, len: {1}'.format(item, len(deque_list)))
+        in_deque.append(item)
+    return deque_list
+
+
 if __name__ == '__main__':
-    args = parse_args().parse_args()
     main(args)
