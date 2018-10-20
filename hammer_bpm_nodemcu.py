@@ -6,12 +6,6 @@ from machine import Pin, UART
 import dfplayer as df
 
 
-'''
-BPM_FILE:           TSV file with bpm values in form: filename \t bpm
-SAMPLE_SIZE:        Number of inter-strike delay values to average for BPM calculation 
-STDEV_THRESH:       Max threshold of standard dev of delay counts to trigger a bpm calculation
-PCT_CHANGE_TRIGGER: The percent change in BPM to trigger a song change
-'''
 
 BPM_FILE = 'bpm_list.tsv'
 SAMPLE_SIZE = 4 
@@ -24,7 +18,7 @@ DF_SERIAL_PIN = UART(1, 9600)
 DF_SERIAL_PIN.init(9600, bits=8, parity=None, stop=1)
 DF_BUSY_PIN = Pin(0, Pin.IN, Pin.PULL_UP)
 
-def main(args):
+def main():
 
     delay_obj = Delays(STDEV_THRESH, SAMPLE_SIZE)
     song_obj = Songs(BPM_FILE, PCT_CHANGE_TRIGGER)
@@ -53,17 +47,9 @@ class Delays(object):
         self.bpm = None
 
     def add_event(self, event_time):
-        # debounce
-        # Shouldn't need the debounce as we're using DebouncedSwitch
-        # if event_time - self.last_timestamp < 0.2:
-        #    return
-        
         elapsed_seconds = ticks_diff(event_time, self.last_timestamp)/1000
         self.delays.append(elapsed_seconds)
         self.last_timestamp = event_time
-    
-        #print('delays: {0}'.format(self.delays))
-        #print('stdev: {0}'.format(np.std(self.delays)))
 
     def calc_bpm(self):
         if len(self.delays) == self.sample_size and stdev(deque_to_list(self.delays)) < self.stdev_thresh:
@@ -76,12 +62,13 @@ class Delays(object):
 class Songs(object):
     def __init__(self, bpm_filename, pct_change_trigger):
         # Load BPM file
-        self.bpm_dict = {}
         self.bpm_list = []
+        self.folder_list = []
+        self.file_number_list = []
         with open(bpm_filename, 'r') as bpm_file:
             for i,line in enumerate(bpm_file):
-                if i > 25:
-                    break
+                # if i > 25:
+                #    break
                 line = line.rstrip('\n')
                 line = line.rstrip('\r')
                 if not line:
@@ -92,11 +79,16 @@ class Songs(object):
                 number = int(file_name[:3])
                 # name = file_name[:4]
                 bpm = float(bpm)
-                
-                self.bpm_dict[float(bpm)] = {'folder':folder, 'number':number} 
+                 
                 self.bpm_list.append(bpm)
-        self.bpm_list = sorted(self.bpm_list)
+                self.folder_list.append(folder)
+                # self.file_number_list.append(number)
         
+        self.sort_indices = [i[0] for i in sorted(enumerate(self.bpm_list), key=lambda x:x[1])]
+        self.bpm_list = [self.bpm_list[i] for i in self.sort_indices]
+        self.folder_list = [self.folder_list[i] for i in self.sort_indices]
+        # self.file_number_list = [self.folder_list[i] for i in sort_indices]
+
         self.pct_change_trigger = PCT_CHANGE_TRIGGER
 
         self.player = df.Player(uart=DF_SERIAL_PIN, busy_pin=DF_BUSY_PIN)
@@ -105,18 +97,21 @@ class Songs(object):
 
     def select_song(self, bpm):
         pct_change = fabs((self.now_playing_bpm - bpm) / bpm)
-        print('Now playing: {0}, BPM: {1}, % Change: {2}'.format(self.now_playing_bpm, bpm, pct_change))
+        print('Now playing: {0}, detected BPM: {1}, % Change: {2}'.format(self.now_playing_bpm, bpm, pct_change))
         if pct_change > self.pct_change_trigger:
             
-            song_bpm = get_closest_value(self.bpm_list, bpm)
-            song_dict = self.bpm_dict[song_bpm]
-            if (song_dict['folder'],song_dict['number']) != self.now_playing:
-                print('Playing song: {0}:{1} with BPM {2}'.format(song_dict['folder'], song_dict['number'], song_bpm))
-                self.play_song(song_dict['folder'], song_dict['number'], song_bpm)
+            song_index = get_closest_index(self.bpm_list, bpm)
+            selected_folder = self.folder_list[song_index]
+            selected_file_number = self.sort_indices[song_index] + 1 # song filenumbers are 1-based
+            selected_song_bpm = self.bpm_list[song_index]
+            
+            if (selected_folder,selected_file_number) != self.now_playing:
+                print('==> Changing to  song: {0}:{1} with BPM {2}'.format(selected_folder, selected_file_number, selected_song_bpm))
+                self.play_song(selected_folder, selected_file_number, selected_song_bpm)
         return self.now_playing
 
     def play_song(self, folder, number, bpm):
-        if self.player.playing(): 
+        if self.now_playing and self.player.playing(): 
             self._fade_out()
         else:
             self.player.volume(0)
@@ -157,7 +152,7 @@ def stdev(lst, population=True):
     sd = sqrt(variance)
     return sd
 
-def get_closest_value(arr, target):
+def get_closest_index(arr, target):
     n = len(arr)
     left = 0
     right = n - 1
@@ -165,10 +160,12 @@ def get_closest_value(arr, target):
 
     # edge case - last or above all
     if target >= arr[n - 1]:
-        return arr[n - 1]
+        # return arr[n - 1]
+        return n-1
     # edge case - first or below all
     if target <= arr[0]:
-        return arr[0]
+        # return arr[0]
+        return 0
     # BSearch solution: Time & Space: Log(N)
 
     while left < right:
@@ -178,12 +175,14 @@ def get_closest_value(arr, target):
         elif target > arr[mid]:
             left = mid + 1
         else:
-            return arr[mid]
-
+            #return arr[mid]
+            return mid
     if target < arr[mid]:
-        return find_closest(arr[mid - 1], arr[mid], target)
+        #return find_closest(arr[mid - 1], arr[mid], target)
+        return find_closest_index(mid-1, mid, arr, target)
     else:
-        return find_closest(arr[mid], arr[mid + 1], target)
+        #return find_closest(arr[mid], arr[mid + 1], target)
+        return find_closest_index(mid, mid+1, arr, target)
 
 # findClosest
 # We find the closest by taking the difference
@@ -192,6 +191,10 @@ def get_closest_value(arr, target):
 # between these two. 
 def find_closest(val1, val2, target):
     return val2 if target - val1 >= val2 - target else val1
+
+def find_closest_index(idx1, idx2, value_list, target):
+    return idx2 if target - value_list[idx1] >= value_list[idx2] - target else idx1
+
 
 def deque_to_list(in_deque):
     deque_list = []
@@ -204,4 +207,4 @@ def deque_to_list(in_deque):
 
 
 if __name__ == '__main__':
-    main(args)
+    main()
