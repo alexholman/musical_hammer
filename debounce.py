@@ -45,6 +45,39 @@ class DebouncedSwitch:
         self._set_cb(self._sw_cb if cb else None)
 
 
+class DebouncedSwitchAnalog:
+    def __init__(self, sw, threshold, cb, arg=None, delay=50, tid=4):
+        # sw: Pin object that is switch input
+        # cb: callback function
+
+        self.sw = sw
+        self.threshold = threshold
+        # Create references to bound methods beforehand
+        # http://docs.micropython.org/en/latest/pyboard/library/micropython.html#micropython.schedule
+        self._sw_cb = self.sw_cb
+        self._tim_cb = self.tim_cb
+        self._set_cb = getattr(self.sw, 'callback', None) or self.sw.irq
+        self.delay = delay
+        self.tim = Timer(tid)
+        self.callback(cb, arg)
+
+    def sw_cb(self, pin=None):
+        self._set_cb(None)
+        timer_init(self.tim, self.delay, self._tim_cb)
+
+    def tim_cb(self, tim):
+        tim.deinit()
+        if self.sw():
+            micropython.schedule(self.cb, self.arg)
+        self._set_cb(self._sw_cb if self.cb else None)
+
+    def callback(self, cb, arg=None):
+        self.tim.deinit()
+        self.cb = cb
+        self.arg = arg
+        self._set_cb(self._sw_cb if cb else None)
+
+
 def test_pyb(ledno=1):
     import pyb
     sw = pyb.Switch()
