@@ -4,6 +4,7 @@ from ucollections import deque
 import debounce as db 
 from machine import Pin, UART
 import dfplayer as df
+from aswitch import launch, Delay_ms, AnalogSwitch
 
 
 # BPM_FILE:           TSV file with bpm values in form: filename \t bpm

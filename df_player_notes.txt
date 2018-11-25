@@ -18,3 +18,16 @@ def callback(p):
 
 p0 = machine.Pin(5, machine.Pin.IN, machine.Pin.PULL_UP)
 p0.irq(trigger=machine.Pin.IRQ_RISING, handler=callback)
+
+
+
+import uasyncio as asyncio
+from machine import Pin
+
+async def killer():
+    pin = Pin(5, Pin.IN, Pin.PULL_UP)
+    while pin.value():
+        await asyncio.sleep_ms(50)
+
+loop = asyncio.get_event_loop()
+loop.run_until_complete(killer())
