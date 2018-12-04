@@ -1,37 +1,10 @@
 from math import sqrt, fabs
 from utime import ticks_ms, ticks_diff, sleep
 from ucollections import deque
-import debounce as db 
-from machine import Pin, UART
+# import debounce as db
+# from machine import Pin, UART
 import dfplayer as df
-from aswitch import launch, Delay_ms, AnalogSwitch
-
-
-# BPM_FILE:           TSV file with bpm values in form: filename \t bpm
-# SAMPLE_SIZE:        Number of inter-strike delay values to average for BPM calculation
-# STDEV_THRESH:       Max threshold of standard dev of delay counts to trigger a bpm calculation
-# PCT_CHANGE_TRIGGER: The percent change in BPM to trigger a song change
-
-BPM_FILE = 'bpm_list.tsv'
-SAMPLE_SIZE = 4 
-STDEV_THRESH = 0.05 
-PCT_CHANGE_TRIGGER = 0.10
-SENSOR_PIN = Pin(5, Pin.IN, Pin.PULL_UP)
-LED_PIN = Pin(16, Pin.OUT)
-
-DF_SERIAL_PIN = UART(1, 9600)
-DF_SERIAL_PIN.init(9600, bits=8, parity=None, stop=1)
-DF_BUSY_PIN = Pin(0, Pin.IN, Pin.PULL_UP)
-
-def main():
-
-    delay_obj = Delays(STDEV_THRESH, SAMPLE_SIZE)
-    song_obj = Songs(BPM_FILE, PCT_CHANGE_TRIGGER)
-     
-    sensor_switch = db.DebouncedSwitch(SENSOR_PIN, strike_event_handler, (delay_obj, song_obj))
-    
-    while True:
-        pass
+import uasyncio as asyncio
 
 
 def strike_event_handler(args):
@@ -94,6 +67,8 @@ class Songs(object):
         self.now_playing_bpm = 0
         self.now_playing = None
 
+        self.loop = asyncio.get_event_loop()
+
     def select_song(self, bpm):
         pct_change = fabs((self.now_playing_bpm - bpm) / bpm)
         print('Continuing: {0}, detected BPM: {1}, % Change: {2}'.format(self.now_playing_bpm, bpm, pct_change))
@@ -108,28 +83,28 @@ class Songs(object):
 
     def play_song(self, folder, number, bpm):
         if self.now_playing and self.player.playing():
-            self._fade_out()
+            self.loop.create_task(self._fade_out())
         else:
             self.player.volume(0)
         self.player.play(folder, number)
-        self._fade_in()
+        self.loop.create_task(self._fade_in())
         self.now_playing = (folder,number)
         self.now_playing_bpm = bpm
 
-    def _fade_in(self):
-        sleep(0.5)
+    async def _fade_in(self):
+        await asyncio.sleep_ms(500)
         self.player.volume(0)
         for i in range(10):
             self.player.volume((float(i)+1)/10)
-            sleep(1/10)
-        sleep(0.5)
+            await asyncio.sleep_ms(100)
+        await asyncio.sleep_ms(500)
 
-    def _fade_out(self):
-        sleep(0.5)
+    async def _fade_out(self):
+        await asyncio.sleep_ms(500)
         for i in range(10,0,-1):
             self.player.volume((float(i)-1)/10)
-            sleep(1/10)
-        sleep(0.5)
+            await asyncio.sleep_ms(100)
+        await asyncio.sleep_ms(500)
 
 #------------------------
 # Define helper functions
